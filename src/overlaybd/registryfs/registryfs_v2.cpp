@@ -117,16 +117,16 @@ public:
     long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
         Timeout tmo(timeout);
         long ret = 0;
-        UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
-            return get_actual_url(url, tmo.timeout(), ret);
-        });
+        // UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
+        //     return get_actual_url(url, tmo.timeout(), ret);
+        // });
 
-        if (actual_info == nullptr)
-            return ret;
+        // if (actual_info == nullptr)
+        //     return ret;
 
         estring *actual_url = (estring*)&url;
-        if (actual_info->mode == UrlMode::Redirect)
-            actual_url = &actual_info->info;
+        // if (actual_info->mode == UrlMode::Redirect)
+        //     actual_url = &actual_info->info;
         //use p2p proxy
         estring accelerate_url;
         if(m_accelerate.size() > 0) {
@@ -137,10 +137,10 @@ public:
 
         op.req.reset(Verb::GET, *actual_url);
         // set token if needed
-        if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
-            op.req.headers.insert(kAuthHeaderKey, "Bearer ");
-            op.req.headers.value_append(actual_info->info);
-        }
+        // if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
+        //     op.req.headers.insert(kAuthHeaderKey, "Bearer ");
+        //     op.req.headers.value_append(actual_info->info);
+        // }
         op.req.headers.range(offset, offset + count - 1);
         op.set_enable_proxy(m_client->has_proxy());
         op.retry = 0;

@@ -115,15 +115,15 @@ public:
              photon::net::IOVWriter *writer, uint64_t timeout) {
         Timeout tmo(timeout);
         long ret = 0;
-        UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
-            return getActualUrl(url, tmo.timeout(), ret);
-        });
-        if (actual_info == nullptr)
-            return ret;
+        // UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
+        //     return getActualUrl(url, tmo.timeout(), ret);
+        // });
+        // if (actual_info == nullptr)
+        //     return ret;
 
         const char *actual_url = url;
-        if (actual_info->mode == UrlMode::Redirect)
-            actual_url = actual_info->info.data();
+        // if (actual_info->mode == UrlMode::Redirect)
+        //     actual_url = actual_info->info.data();
         //use p2p proxy
         estring accelerate_url;
         if (m_accelerate.size() > 0) {
@@ -140,8 +140,8 @@ public:
             DEFER({ release_cURL(curl); });
             curl->set_redirect(10);
             // set token if needed
-            if (actual_info->mode == UrlMode::Self && !actual_info->info.empty())
-                curl->append_header(kAuthHeaderKey, actual_info->info);
+            // if (actual_info->mode == UrlMode::Self && !actual_info->info.empty())
+            //     curl->append_header(kAuthHeaderKey, actual_info->info);
             if (offset >= 0) {
                 curl->set_range(offset, offset + count - 1);
             } else {
