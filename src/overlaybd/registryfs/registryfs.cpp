@@ -113,7 +113,7 @@ public:
 
     long GET(const char *url, photon::net::HeaderMap *headers, off_t offset, size_t count,
              photon::net::IOVWriter *writer, uint64_t timeout) {
-        Timeout tmo(timeout);
+        // Timeout tmo(timeout);
         long ret = 0;
         // UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
         //     return getActualUrl(url, tmo.timeout(), ret);
@@ -159,10 +159,10 @@ public:
             }
         }
         if (ret == 200 || ret == 206) {
-            m_url_info.release(url);
+            // m_url_info.release(url);
             return ret;
         }
-        m_url_info.release(url, true);
+        // m_url_info.release(url, true);
         LOG_ERROR_RETURN(0, ret, "Failed to fetch data ", VALUE(ret), VALUE(url));
     }
 

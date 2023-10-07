@@ -1,0 +1,55 @@
+# nfpm example config file
+#
+# check https://nfpm.goreleaser.com/configuration for detailed usage
+#
+name: "overlaybd"
+arch: "amd64"
+platform: "linux"
+version: "1.0.1"
+section: "default"
+priority: "extra"
+
+maintainer: "overlaybd authors"
+description: |
+  Overlaybd tcmu
+vendor: "overlaybd"
+homepage: "https://github.com/containerd/overlaybd"
+license: "Apache-2.0"
+contents:
+- src: ./build/output/ext4_64
+  dst: /opt/overlaybd/baselayers/ext4_64
+- src: ./build/ouput/overlaybd-apply
+  dst: /opt/overlaybd/bin/overlaybd-apply
+- src: ./build/ouput/overlaybd-commit
+  dst: /opt/overlaybd/bin/overlaybd-commit
+- src: ./build/ouput/overlaybd-create
+  dst: /opt/overlaybd/bin/overlaybd-create
+- src: ./build/ouput/overlaybd-tcmu
+  dst: /opt/overlaybd/bin/overlaybd-tcmu
+- src: ./build/ouput/overlaybd-zfile
+  dst: /opt/overlaybd/bin/overlaybd-zfile
+- src: ./build/ouput/turboOCI-apply
+  dst: /opt/overlaybd/bin/turboOCI-apply
+- src: ./build/_deps/e2fsprogs-src/build/lib/libext2fs.so.2.4
+  dst: /opt/overlaybd/lib/libext2fs.so.2.4
+- src: ./src/example-config/overlaybd-tcmu.service
+  dst: /opt/overlaybd/overlaybd-tcmu.service
+  type: config
+- src: ./src/example-config/overlaybd.json
+  dst: /etc/overlaybd/overlaybd.json
+  type: config
+- src: ./src/example-config/cred.json
+  dst: /opt/overlaybd/cred.json
+  type: config
+- src: /opt/overlaybd/lib/libext2fs.so.2.4
+  dst: /opt/overlaybd/lib/libext2fs.so.2
+  type: symlink
+- src: /opt/overlaybd/lib/libext2fs.so.2
+  dst: /opt/overlaybd/lib/libext2fs.so
+  type: symlink
+
+overrides:
+  rpm:
+    scripts:
+  deb:
+    scripts:

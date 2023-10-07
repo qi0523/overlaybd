@@ -115,18 +115,18 @@ public:
     }
 
     long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
-        Timeout tmo(timeout);
+        // Timeout tmo(timeout);
         long ret = 0;
-        UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
-            return get_actual_url(url, tmo.timeout(), ret);
-        });
+        // UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
+        //     return get_actual_url(url, tmo.timeout(), ret);
+        // });
 
-        if (actual_info == nullptr)
-            return ret;
+        // if (actual_info == nullptr)
+        //     return ret;
 
         estring *actual_url = (estring*)&url;
-        if (actual_info->mode == UrlMode::Redirect)
-            actual_url = &actual_info->info;
+        // if (actual_info->mode == UrlMode::Redirect)
+        //     actual_url = &actual_info->info;
         //use p2p proxy
         estring accelerate_url;
         if(m_accelerate.size() > 0) {
@@ -137,21 +137,21 @@ public:
 
         op.req.reset(Verb::GET, *actual_url);
         // set token if needed
-        if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
-            op.req.headers.insert(kAuthHeaderKey, actual_info->info);
-        }
+        // if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
+        //     op.req.headers.insert(kAuthHeaderKey, actual_info->info);
+        // }
         op.req.headers.range(offset, offset + count - 1);
         op.set_enable_proxy(m_client->has_proxy());
         op.retry = 0;
-        op.timeout = tmo.timeout();
+        // op.timeout = tmo.timeout();
         m_client->call(&op);
 
         if (op.status_code == 200 || op.status_code == 206) {
-            m_url_info.release(url);
+            // m_url_info.release(url);
             return ret;
         }
 
-        m_url_info.release(url, true);
+        // m_url_info.release(url, true);
         LOG_ERROR_RETURN(0, ret, "Failed to fetch data ", VALUE(url), VALUE(op.status_code), VALUE(ret));
     }
 
