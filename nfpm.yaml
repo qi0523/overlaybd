@@ -18,27 +18,27 @@ license: "Apache-2.0"
 contents:
 - src: ./build/output/ext4_64
   dst: /opt/overlaybd/baselayers/ext4_64
-- src: ./build/ouput/overlaybd-apply
+- src: ./build/output/overlaybd-apply
   dst: /opt/overlaybd/bin/overlaybd-apply
-- src: ./build/ouput/overlaybd-commit
+- src: ./build/output/overlaybd-commit
   dst: /opt/overlaybd/bin/overlaybd-commit
-- src: ./build/ouput/overlaybd-create
+- src: ./build/output/overlaybd-create
   dst: /opt/overlaybd/bin/overlaybd-create
-- src: ./build/ouput/overlaybd-tcmu
+- src: ./build/output/overlaybd-tcmu
   dst: /opt/overlaybd/bin/overlaybd-tcmu
-- src: ./build/ouput/overlaybd-zfile
+- src: ./build/output/overlaybd-zfile
   dst: /opt/overlaybd/bin/overlaybd-zfile
-- src: ./build/ouput/turboOCI-apply
+- src: ./build/output/turboOCI-apply
   dst: /opt/overlaybd/bin/turboOCI-apply
 - src: ./build/_deps/e2fsprogs-src/build/lib/libext2fs.so.2.4
   dst: /opt/overlaybd/lib/libext2fs.so.2.4
-- src: ./src/example-config/overlaybd-tcmu.service
+- src: ./src/example_config/overlaybd-tcmu.service
   dst: /opt/overlaybd/overlaybd-tcmu.service
   type: config
-- src: ./src/example-config/overlaybd.json
+- src: ./src/example_config/overlaybd.json
   dst: /etc/overlaybd/overlaybd.json
   type: config
-- src: ./src/example-config/cred.json
+- src: ./src/example_config/cred.json
   dst: /opt/overlaybd/cred.json
   type: config
 - src: /opt/overlaybd/lib/libext2fs.so.2.4
