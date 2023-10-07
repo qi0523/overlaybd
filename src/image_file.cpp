@@ -31,10 +31,10 @@
 #include "overlaybd/zfile/zfile.h"
 #include "config.h"
 #include "image_file.h"
-#include "sure_file.h"
 #include "switch_file.h"
 #include "overlaybd/gzip/gz.h"
 #include "overlaybd/gzindex/gzfile.h"
+#include "overlaybd/tar/tar_file.h"
 
 #define PARALLEL_LOAD_INDEX 32
 using namespace photon::fs;
@@ -59,7 +59,7 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
     auto file = open_localfile_adaptor(path.c_str(), flags, 0644, ioengine);
     if (!file) {
         set_failed("failed to open local file " + path);
-        LOG_ERROR_RETURN(0, nullptr, "open(`),`:`", path, errno, strerror(errno));
+        LOG_ERRNO_RETURN(0, nullptr, "open(`) failed", path);
     }
 
     if (flags & O_DIRECT) {
@@ -68,18 +68,24 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
         if (!aligned_file) {
             set_failed("failed to open aligned_file_adaptor " + path);
             delete file;
-            LOG_ERROR_RETURN(0, nullptr, "new_aligned_file_adaptor(`) failed, `:`", path, errno,
-                             strerror(errno));
+            LOG_ERRNO_RETURN(0, nullptr, "new_aligned_file_adaptor(`) failed", path);
         }
         file = aligned_file;
     }
+
+    auto tar_file = new_tar_file_adaptor(file);
+    if (!tar_file) {
+        set_failed("failed to open file as tar file " + path);
+        delete file;
+        LOG_ERROR_RETURN(0, nullptr, "new_tar_file_adaptor(`) failed", path);
+    }
+    file = tar_file;
     // set to local, no need to switch, for zfile and audit
     ISwitchFile *switch_file = new_switch_file(file, true, path.c_str());
     if (!switch_file) {
-        set_failed("failed to open switch file `" + path);
+        set_failed("failed to open switch file " + path);
         delete file;
-        LOG_ERROR_RETURN(0, nullptr, "new_switch_file(`) failed, `,:`", path, errno,
-                         strerror(errno));
+        LOG_ERRNO_RETURN(0, nullptr, "new_switch_file(`) failed", path);
     }
     file = switch_file;
 
@@ -90,7 +96,7 @@ IFile *ImageFile::__open_ro_target_file(const std::string &path) {
     auto file = open_localfile_adaptor(path.c_str(), O_RDONLY, 0644, 0);
     if (!file) {
         set_failed("failed to open local data file " + path);
-        LOG_ERROR_RETURN(0, nullptr, "open(`),`:`", path, errno, strerror(errno));
+        LOG_ERRNO_RETURN(0, nullptr, "open(`) failed", path);
     }
     return file;
 }
@@ -98,7 +104,6 @@ IFile *ImageFile::__open_ro_target_file(const std::string &path) {
 IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::string &data_digest,
                                                const uint64_t size, int layer_index) {
     std::string url;
-    int64_t extra_range, rand_wait;
 
     if (conf.repoBlobUrl() == "") {
         set_failed("empty repoBlobUrl");
@@ -126,7 +131,6 @@ IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::str
 IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
                                    const uint64_t size, int layer_index) {
     std::string url;
-    int64_t extra_range, rand_wait;
 
     if (conf.repoBlobUrl() == "") {
         set_failed("empty repoBlobUrl");
@@ -163,18 +167,18 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
     remote_file->ioctl(SET_SIZE, size);
     remote_file->ioctl(SET_LOCAL_DIR, dir);
 
-    ISwitchFile *switch_file = new_switch_file(remote_file);
-    if (!switch_file) {
-        set_failed("failed to open switch file `" + url);
+    IFile *tar_file = new_tar_file_adaptor(remote_file);
+    if (!tar_file) {
+        set_failed("failed to open remote file as tar file " + url);
         delete remote_file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
+        LOG_ERROR_RETURN(0, nullptr, "failed to open remote file as tar file `", url);
     }
 
-    IFile *sure_file = new_sure_file(switch_file, this);
-    if (!sure_file) {
-        set_failed("failed to open sure file `" + url);
-        delete switch_file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open sure file `", url);
+    ISwitchFile *switch_file = new_switch_file(tar_file, false, url.c_str());
+    if (!switch_file) {
+        set_failed("failed to open switch file " + url);
+        delete tar_file;
+        LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
     if (conf.HasMember("download") && conf.download().enable() == 1) {
@@ -184,14 +188,14 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
             LOG_WARN("failed to open source file, ignore download");
         } else {
             BKDL::BkDownload *obj =
-                new BKDL::BkDownload(switch_file, srcfile, size, dir, conf.download().maxMBps(),
-                                     conf.download().tryCnt(), this, digest);
+                new BKDL::BkDownload(switch_file, srcfile, size, dir, digest, url, m_status,
+                    conf.download().maxMBps(), conf.download().tryCnt(), conf.download().blockSize());
             LOG_DEBUG("add to download list for `", dir);
             dl_list.push_back(obj);
         }
     }
 
-    return sure_file;
+    return switch_file;
 }
 
 void ImageFile::start_bk_dl_thread() {
@@ -203,7 +207,8 @@ void ImageFile::start_bk_dl_thread() {
     uint64_t extra_range = conf.download().delayExtra();
     extra_range = (extra_range <= 0) ? 30 : extra_range;
     uint64_t delay_sec = (rand() % extra_range) + conf.download().delay();
-
+    LOG_INFO("background download is enabled, delay `, maxMBps `, tryCnt `, blockSize `",
+             delay_sec, conf.download().maxMBps(), conf.download().tryCnt(), conf.download().blockSize());
     dl_thread_jh = photon::thread_enable_join(
         photon::thread_create11(&BKDL::bk_download_proc, dl_list, delay_sec, m_status));
 }
@@ -211,8 +216,8 @@ void ImageFile::start_bk_dl_thread() {
 struct ParallelOpenTask {
     std::vector<IFile *> &files;
     int eno = 0;
-    std::vector<ImageConfigNS::LayerConfig> &layers;
     int i = 0, nlayers;
+    std::vector<ImageConfigNS::LayerConfig> &layers;
 
     int get_next_job_index() {
         LOG_DEBUG("create job, layer_id: `", i);
@@ -290,7 +295,7 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
         auto gz_index = open_localfile_adaptor(layer.gzipIndex().c_str(), O_RDONLY, 0644, 0);
         if (!gz_index) {
             set_failed("failed to open gzip index " + layer.gzipIndex());
-            LOG_ERROR_RETURN(0, -1, "open(`),`:`", layer.gzipIndex(), errno, strerror(errno));
+            LOG_ERRNO_RETURN(0, -1, "open(`) failed", layer.gzipIndex());
         }
         target_file = new_gzfile(target_file, gz_index, true);
         if (image_service.global_conf.gzipCacheConfig().enable() && layer.targetDigest() != "") {
@@ -371,30 +376,27 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     IFile *idx_file = NULL;
     IFile *target_file = NULL;
     LSMT::IFileRW *ret = NULL;
-
-    int dafa_file_flags = O_RDWR;
-
-    data_file = new_sure_file_by_path(upper.data().c_str(), O_RDWR, this);
+    data_file = open_localfile_adaptor(upper.data().c_str(), O_RDWR, 0644);
     if (!data_file) {
         LOG_ERROR("open(`,flags), `:`", upper.data(), errno, strerror(errno));
         goto ERROR_EXIT;
     }
 
-    idx_file = new_sure_file_by_path(upper.index().c_str(), O_RDWR, this);
+    idx_file = open_localfile_adaptor(upper.index().c_str(), O_RDWR, 0644);
     if (!idx_file) {
         LOG_ERROR("open(`,flags), `:`", upper.index(), errno, strerror(errno));
         goto ERROR_EXIT;
     }
 
     if (upper.target() != "") {
-        LOG_INFO("fastoci upper layer : `, `, `, `", upper.index(), upper.data(), upper.target());
-        target_file = new_sure_file_by_path(upper.target().c_str(), O_RDWR, this);
+        LOG_INFO("turboOCIv1 upper layer : `, `, `, `", upper.index(), upper.data(), upper.target());
+        target_file = open_localfile_adaptor(upper.target().c_str(), O_RDWR, 0644);
         if (!target_file) {
             LOG_ERROR("open(`,flags), `:`", upper.target(), errno, strerror(errno));
             goto ERROR_EXIT;
         }
         if (upper.gzipIndex() != "") {
-            auto gzip_index = new_sure_file_by_path(upper.gzipIndex().c_str(), O_RDWR, this);
+            auto gzip_index = open_localfile_adaptor(upper.gzipIndex().c_str(), O_RDWR, 0644);
             if (!gzip_index) {
                 LOG_ERROR("open(`,flags), `:`", upper.gzipIndex(), errno, strerror(errno));
                 goto ERROR_EXIT;

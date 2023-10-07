@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <photon/photon.h>
 #include "CLI11.hpp"
+#include "photon/fs/filesystem.h"
 
 using namespace std;
 using namespace photon::fs;
@@ -38,18 +39,30 @@ using namespace ZFile;
 
 IFileSystem *lfs = nullptr;
 
+int verify_crc(IFile* src_file) {
+
+    if (is_zfile(src_file) != 1) {
+        fprintf(stderr, "format error! <source_file> should be a zfile.\n");
+        exit(-1);
+    }
+    return zfile_validation_check(src_file);
+}
+
 int main(int argc, char **argv) {
 
     bool rm_old = false;
     bool tar = false;
     bool extract = false;
+    bool verify = false;
     std::string fn_src, fn_dst;
     std::string algorithm;
     int block_size;
+    bool verbose = false;
 
     CLI::App app{"this is a zfile tool to create/extract zfile"};
     app.add_flag("-t", tar, "wrapper with tar")->default_val(false);
     app.add_flag("-x", extract, "extract zfile")->default_val(false);
+    app.add_flag("--verify", verify, "verify checksum of {source_file}")->default_val(false);
     app.add_flag("-f", rm_old, "force compress. unlink exist")->default_val(false);
     app.add_option("--algorithm", algorithm, "compress algorithm, [lz4|zstd]")->default_str("lz4");
     app.add_option(
@@ -60,25 +73,41 @@ int main(int argc, char **argv) {
         ->type_name("FILEPATH")
         ->check(CLI::ExistingFile)
         ->required();
-    app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH")->required();
+    app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH");
+    app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     CLI11_PARSE(app, argc, argv);
 
-    set_log_output_level(1);
+    set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    DEFER({photon::fini();});
+
+    lfs = new_localfs_adaptor();
+    if (verify) {
+        auto file = lfs->open(fn_src.c_str(), O_RDONLY);
+        if (!file) {
+            fprintf(stderr, "failed to open file %s\n", fn_src.c_str());
+            exit(-1);
+        }
+        if (verify_crc(new_tar_file_adaptor(file))!=0) {
+            printf("%s is not a valid zfile blob or checksum can't be found.\n", fn_src.c_str());
+            return -1;
+        }
+        printf("%s is a valid zfile blob.\n", fn_src.c_str());
+        return 0;
+    }
 
     CompressOptions opt;
     opt.verify = 1;
     if (algorithm == "lz4") {
-        opt.type = CompressOptions::LZ4;
+        opt.algo = CompressOptions::LZ4;
     } else if (algorithm == "zstd") {
-        opt.type = CompressOptions::ZSTD;
+        opt.algo = CompressOptions::ZSTD;
     }
     opt.block_size = block_size * 1024;
     if ((opt.block_size & (opt.block_size - 1)) != 0 || (block_size > 64 || block_size < 4)) {
         fprintf(stderr, "invalid '--bs' parameters.\nj");
         exit(-1);
     }
-    lfs = new_localfs_adaptor();
     if (rm_old) {
         lfs->unlink(fn_dst.c_str());
     }

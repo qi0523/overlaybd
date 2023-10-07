@@ -44,15 +44,13 @@ int UnTar::set_file_perms(const char *filename) {
     /* change owner/group */
     if (geteuid() == 0) {
         if (fs->lchown(filename, uid, gid) == -1) {
-            LOG_ERROR("lchown failed, filename `, `", filename, strerror(errno));
-            return -1;
+            LOG_ERRNO_RETURN(0, -1, "lchown failed, filename `, uid `, gid `", filename, uid, gid);
         }
     }
 
     /* change access/modification time */
     if (fs->lutimes(filename, tv) == -1) {
-        LOG_ERROR("lutimes failed, filename `, `", filename, strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "lutimes failed, filename `", filename);
     }
 
     /* change permissions */
@@ -69,11 +67,22 @@ int UnTar::set_file_perms(const char *filename) {
         return 0;
     }
     if (fs->chmod(filename, mode) == -1) {
-        LOG_ERROR("chmod failed `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "chmod failed, filename `, mode `", filename, mode);
     }
 
     return 0;
+}
+
+ssize_t UnTar::dump_tar_headers(photon::fs::IFile *as) {
+    ssize_t count = 0;
+    while (read_header(as) == 0) {
+        if (TH_ISREG(header)) {
+            auto size = get_size();
+            file->lseek(((size + T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE, SEEK_CUR); // skip size
+        }
+        count++;
+    }
+    return count;
 }
 
 int UnTar::extract_all() {
@@ -83,8 +92,7 @@ int UnTar::extract_all() {
 
     while ((i = read_header()) == 0) {
         if (extract_file() != 0) {
-            LOG_ERROR("extract failed, filename `, `", get_pathname(), strerror(errno));
-            return -1;
+            LOG_ERRNO_RETURN(0, -1, "extract failed, filename `", get_pathname());
         }
         if (TH_ISDIR(header)) {
             dirs.emplace_back(std::make_pair(std::string(get_pathname()), header.get_mtime()));
@@ -99,8 +107,7 @@ int UnTar::extract_all() {
         tv[0].tv_sec = tv[1].tv_sec = dir.second;
         tv[0].tv_usec = tv[1].tv_usec = 0;
         if (fs->lutimes(path.c_str(), tv) == -1) {
-            LOG_ERROR("utime failed, filename `, `", dir.first.c_str(), strerror(errno));
-            return -1;
+            LOG_ERRNO_RETURN(0, -1, "utime failed, filename `", dir.first.c_str());
         }
     }
 
@@ -111,7 +118,6 @@ int UnTar::extract_all() {
 
 int UnTar::extract_file() {
     int i;
-
     // normalize name
     std::string npath = remove_last_slash(get_pathname());
     const char *filename = npath.c_str();
@@ -140,15 +146,11 @@ int UnTar::extract_file() {
         } else {
             if (!S_ISDIR(s.st_mode)) {
                 if (fs->unlink(npath.c_str()) == -1 && errno != ENOENT) {
-                    LOG_ERROR("remove exist file ` failed, `", npath.c_str(), strerror(errno));
-                    errno = EEXIST;
-                    return -1;
+                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist file ` failed", npath.c_str());
                 }
             } else if (!TH_ISDIR(header)) {
                 if (remove_all(npath) == -1) {
-                    LOG_ERROR("remove exist dir ` failed, `", npath.c_str(), strerror(errno));
-                    errno = EEXIST;
-                    return -1;
+                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist dir ` failed", npath.c_str());
                 }
             }
         }
@@ -195,35 +197,44 @@ int UnTar::extract_file() {
 
 int UnTar::extract_regfile_meta_only(const char *filename) {
     size_t size = get_size();
-
-    LOG_DEBUG("  ==> extracting: ` (` bytes) (fastoci index)\n", filename, size);
+    LOG_DEBUG("  ==> extracting: ` (` bytes) (turboOCIv1 index)", filename, size);
     photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0666);
     if (fout == nullptr) {
         return -1;
     }
     DEFER({delete fout;});
 
-    auto p = file->lseek(0, SEEK_CUR);
-    fout->fallocate(0, 0, size);
+    off_t p = 0;
+    if (from_tar_idx) {
+        p = *((off_t*)&header.devmajor);
+    } else {
+        p = file->lseek(0, SEEK_CUR);
+    }
     struct photon::fs::fiemap_t<8192> fie(0, size);
-    fout->fiemap(&fie);
-    for (int i = 0; i < fie.fm_mapped_extents; i++) {
+
+    if (fout->fallocate(0, 0, size) != 0 || fout->fiemap(&fie)!=0 ){
+        return -1;
+    }
+    auto count = ((size+ T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE;
+    for (uint32_t i = 0; i < fie.fm_mapped_extents; i++) {
         LSMT::RemoteMapping lba;
         lba.offset = fie.fm_extents[i].fe_physical;
-        lba.count = fie.fm_extents[i].fe_length;
+        lba.count = (fie.fm_extents[i].fe_length < count ? fie.fm_extents[i].fe_length : count);
         lba.roffset = p;
         int nwrite = fs_base_file->ioctl(LSMT::IFileRW::RemoteData, lba);
         if (nwrite < 0) {
             LOG_ERRNO_RETURN(0, -1, "failed to write lba");
         }
         p += nwrite;
+        count-=lba.count;
     }
 
     struct stat st;
     fout->fstat(&st);
     LOG_DEBUG("reg file size `", st.st_size);
-
-    file->lseek( ((size+511)/512)*512, SEEK_CUR); // skip size
+    if (not from_tar_idx) {
+        file->lseek(((size+ T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE, SEEK_CUR); // skip size
+    }
     return 0;
 }
 
@@ -252,11 +263,11 @@ int UnTar::extract_regfile(const char *filename) {
             rsz = left & fs_blockmask;
         else
             rsz = (left & ~T_BLOCKMASK) ? (left & T_BLOCKMASK) + T_BLOCKSIZE : (left & T_BLOCKMASK);
-        if (file->read(buf, rsz) != rsz) {
+        if (file->read(buf, rsz) != (ssize_t)rsz) {
             LOG_ERRNO_RETURN(0, -1, "failed to read block");
         }
         size_t wsz = (left < rsz) ? left : rsz;
-        if (fout->pwrite(buf, wsz, pos) != wsz) {
+        if (fout->pwrite(buf, wsz, pos) != (ssize_t)wsz) {
             LOG_ERRNO_RETURN(0, -1, "failed to write file");
         }
         pos += wsz;
@@ -270,8 +281,7 @@ int UnTar::extract_hardlink(const char *filename) {
     char *linktgt = get_linkname();
     LOG_DEBUG("  ==> extracting: ` (link to `)", filename, linktgt);
     if (fs->link(linktgt, filename) == -1) {
-        LOG_ERROR("link failed, `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "link failed, filename `, linktgt `", filename, linktgt);
     }
     return 0;
 }
@@ -280,8 +290,7 @@ int UnTar::extract_symlink(const char *filename) {
     char *linktgt = get_linkname();
     LOG_DEBUG("  ==> extracting: ` (symlink to `)", filename, linktgt);
     if (fs->symlink(linktgt, filename) == -1) {
-        LOG_ERROR("symlink failed, `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "symlink failed, filename `, linktgt `", filename, linktgt);
     }
     return 0;
 }
@@ -307,8 +316,7 @@ int UnTar::extract_block_char_fifo(const char *filename) {
 
     LOG_DEBUG("  ==> extracting: ` (block/char/fifo `,`)", filename, devmaj, devmin);
     if (fs->mknod(filename, mode, makedev(devmaj, devmin)) == -1) {
-        LOG_ERROR("block/char/fifo failed, `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "block/char/fifo failed, filename `", filename);
     }
 
     return 0;

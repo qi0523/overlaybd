@@ -117,30 +117,29 @@ public:
     long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
         Timeout tmo(timeout);
         long ret = 0;
-        // UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
-        //     return get_actual_url(url, tmo.timeout(), ret);
-        // });
+        UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
+            return get_actual_url(url, tmo.timeout(), ret);
+        });
 
-        // if (actual_info == nullptr)
-        //     return ret;
+        if (actual_info == nullptr)
+            return ret;
 
         estring *actual_url = (estring*)&url;
-        // if (actual_info->mode == UrlMode::Redirect)
-        //     actual_url = &actual_info->info;
+        if (actual_info->mode == UrlMode::Redirect)
+            actual_url = &actual_info->info;
         //use p2p proxy
         estring accelerate_url;
         if(m_accelerate.size() > 0) {
-            accelerate_url = m_accelerate + "/" + *actual_url;
+            accelerate_url = estring().appends(m_accelerate, "/", *actual_url);
             actual_url = &accelerate_url;
             LOG_DEBUG("p2p_url: `", *actual_url);
         }
 
         op.req.reset(Verb::GET, *actual_url);
         // set token if needed
-        // if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
-        //     op.req.headers.insert(kAuthHeaderKey, "Bearer ");
-        //     op.req.headers.value_append(actual_info->info);
-        // }
+        if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
+            op.req.headers.insert(kAuthHeaderKey, actual_info->info);
+        }
         op.req.headers.range(offset, offset + count - 1);
         op.set_enable_proxy(m_client->has_proxy());
         op.retry = 0;
@@ -280,8 +279,8 @@ protected:
                              challengeLine);
         }
         *scope = estring(kv["scope"]);
-        *authurl = estring(kv["realm"]) + "?service=" + estring(kv["service"]) +
-                    "&scope=" + estring(kv["scope"]);
+        *authurl = estring().appends(kv["realm"], "?service=", kv["service"],
+                    "&scope=", kv["scope"]);
         return 0;
     }
 
@@ -356,7 +355,7 @@ public:
     again:
         iovector_view view((struct iovec*)iov, iovcnt);
         auto count = view.sum();
-        if ((ssize_t)count + offset > filesize)
+        if (count + offset > filesize)
             count = filesize - offset;
         LOG_DEBUG("pulling blob from registry: ", VALUE(m_url), VALUE(offset), VALUE(count));
 

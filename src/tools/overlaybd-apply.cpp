@@ -17,6 +17,7 @@
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/subfs.h>
+#include <photon/fs/virtual-file.h>
 #include <photon/photon.h>
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
@@ -37,96 +38,93 @@
 #include "../image_service.h"
 #include "../image_file.h"
 #include "CLI11.hpp"
+#include "comm_func.h"
 
 using namespace std;
 using namespace photon::fs;
 
-IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
-    auto file = open_localfile_adaptor(fn, flags, mode, 0);
-    if (!file) {
-        fprintf(stderr, "failed to open file '%s', %d: %s\n", fn, errno, strerror(errno));
-        exit(-1);
-    }
-    return file;
-}
-
 int main(int argc, char **argv) {
-    string commit_msg;
-    string parent_uuid;
-    std::string image_config_path, input_path, gz_index_path, config_path;
-    bool raw = false, verbose = false;
+    std::string image_config_path, input_path, gz_index_path, config_path, sha256_checksum;
+    string tarheader;
+    bool raw = false, mkfs = false, verbose = false;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer to overlaybd format"};
     app.add_flag("--raw", raw, "apply to raw image")->default_val(false);
+    app.add_flag("--mkfs", mkfs, "mkfs before apply")->default_val(false);
+
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
-    app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile);
-    app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with fastoci")->type_name("FILEPATH");
+    app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->default_val("/etc/overlaybd/overlaybd.json");
+    app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with turboOCIv1")->type_name("FILEPATH");
+    app.add_option("--checksum", sha256_checksum, "sha256 checksum for origin uncompressed data");
     app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+
     app.add_option("image_config_path", image_config_path, "overlaybd image config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    DEFER({photon::fini();});
 
+
+    ImageService *imgservice = nullptr;
     photon::fs::IFile *imgfile = nullptr;
     if (raw) {
         imgfile = open_file(image_config_path.c_str(), O_RDWR, 0644);
     } else {
-        ImageService * imgservice = nullptr;
-        if (config_path.empty()) {
-            imgservice = create_image_service();
-        } else {
-            imgservice = create_image_service(config_path.c_str());
-        }
-        if (imgservice == nullptr) {
-            fprintf(stderr, "failed to create image service\n");
-            return -1;
-        }
-        imgfile = imgservice->create_image_file(image_config_path.c_str());
+        create_overlaybd(config_path, image_config_path, imgservice, imgfile);
     }
-
     if (imgfile == nullptr) {
         fprintf(stderr, "failed to create image file\n");
         exit(-1);
     }
-    // for now, buffer_file can't be used with fastoci
-    auto extfs = new_extfs(imgfile, gz_index_path == "");
-    if (!extfs) {
-        fprintf(stderr, "new extfs failed, %s\n", strerror(errno));
-        exit(-1);
-    }
-    auto target = new_subfs(extfs, "/", true);
-    if (!target) {
-        fprintf(stderr, "new subfs failed, %s\n", strerror(errno));
-        exit(-1);
-    }
+    DEFER({
+        delete imgfile;
+        delete imgservice;
+    });
+    bool gen_turboOCI = (gz_index_path != "" );
+
+    auto target = create_ext4fs(imgfile, mkfs, !gen_turboOCI, "/");
+    DEFER({ delete target; });
 
     photon::fs::IFile* src_file = nullptr;
+    SHA256CheckedFile* checksum_file = nullptr;
 
     auto tarf = open_file(input_path.c_str(), O_RDONLY, 0666);
     DEFER(delete tarf);
 
-    if (gz_index_path != "" && is_gzfile(tarf)) {
-        auto res = create_gz_index(tarf, gz_index_path.c_str(), 1024*1024);
-        LOG_INFO("create_gz_index ", VALUE(res));
-        tarf->lseek(0, 0);
-
+    if (is_gzfile(tarf)) {
+        if (gz_index_path != "") {
+            auto res = create_gz_index(tarf, gz_index_path.c_str(), 1024*1024);
+            LOG_INFO("create_gz_index ", VALUE(res));
+            tarf->lseek(0, 0);
+        }
         src_file = open_gzfile_adaptor(input_path.c_str());
     } else {
         src_file = tarf;
     }
 
+    if (!sha256_checksum.empty()) {
+        src_file = checksum_file = new SHA256CheckedFile(src_file);
+    }
+
     photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gz_index_path != "");
+
+    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gen_turboOCI);
+
     if (tar->extract_all() < 0) {
         fprintf(stderr, "failed to extract\n");
         exit(-1);
     } else {
-        fprintf(stderr, "overlaybd-apply done\n");
+        if (checksum_file != nullptr) {
+            auto calc = checksum_file->sha256_checksum();
+            if (calc != sha256_checksum) {
+                fprintf(stderr, "sha256 checksum mismatch, expect: %s, got: %s\n", sha256_checksum.c_str(), calc.c_str());
+                exit(-1);
+            }
+        }
+        fprintf(stdout, "overlaybd-apply done\n");
+        fprintf(stderr, "%s\n",  sha256_checksum.c_str());
     }
-
-    delete target;
-    delete imgfile;
 
     return 0;
 }

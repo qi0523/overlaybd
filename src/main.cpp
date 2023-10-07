@@ -57,8 +57,8 @@ ImageService *imgservice = nullptr;
 
 class TCMULoop {
 protected:
-    EventLoop *loop;
     struct tcmulib_context *ctx;
+    EventLoop *loop;
     int fd;
 
     int wait_for_readable(EventLoop *) {
@@ -93,6 +93,29 @@ public:
         loop->async_run();
     }
 };
+
+using SureIODelegate = Delegate<ssize_t, const struct iovec *, int, off_t>;
+
+ssize_t sure(SureIODelegate io, const struct iovec *iov, int iovcnt, off_t offset) {
+    auto time_st = photon::now;
+    uint64_t try_cnt = 0, sleep_period = 20UL * 1000;
+again:
+    if (photon::now - time_st > 7LL * 24 * 60 * 60 * 1000 * 1000 /*7days*/) {
+        LOG_ERROR_RETURN(EIO, -1, "sure request timeout, offset: `", offset);
+    }
+    ssize_t ret = io(iov, iovcnt, offset);
+    if (ret >= 0) {
+        return ret;
+    }
+    if (try_cnt % 10 == 0) {
+        LOG_ERROR("io request failed, offset: `, ret: `, retry times: `, errno:`", offset, ret,
+                  try_cnt, errno);
+    }
+    try_cnt++;
+    photon::thread_usleep(sleep_period);
+    sleep_period = std::min(sleep_period * 2, 30UL * 1000 * 1000);
+    goto again;
+}
 
 void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
@@ -142,7 +165,8 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case READ_12:
     case READ_16:
         length = tcmu_iovec_length(cmd->iovec, cmd->iov_cnt);
-        ret = file->preadv(cmd->iovec, cmd->iov_cnt, tcmu_cdb_to_byte(dev, cmd->cdb));
+        ret = sure({file, &ImageFile::preadv}, cmd->iovec, cmd->iov_cnt,
+                   tcmu_cdb_to_byte(dev, cmd->cdb));
         if (ret == length) {
             tcmulib_command_complete(dev, cmd, TCMU_STS_OK);
         } else {
@@ -232,8 +256,8 @@ void *handle(void *args) {
 
 class TCMUDevLoop {
 protected:
-    EventLoop *loop;
     struct tcmu_device *dev;
+    EventLoop *loop;
     int fd;
     photon::ThreadPool<32> threadpool;
 

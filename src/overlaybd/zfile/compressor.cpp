@@ -90,8 +90,7 @@ public:
             LOG_ERROR_RETURN(ENOBUFS, -1, "dst_len should be greater than `", max_dst_size - 1);
         }
         off_t src_offset = 0, dst_offset = 0;
-        int ret = 0;
-        for (ssize_t i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             uncompressed_data[i] = ((unsigned char *)src + src_offset);
             compressed_data[i] = ((unsigned char *)dst + dst_offset);
             src_offset += src_chunk_len[i];
@@ -119,8 +118,7 @@ public:
                              dst_buffer_capacity / n, src_blk_size);
         }
         off_t src_offset = 0, dst_offset = 0;
-        int ret = 0;
-        for (ssize_t i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             compressed_data[i] = ((unsigned char *)src + src_offset);
             uncompressed_data[i] = ((unsigned char *)dst + dst_offset);
             src_offset += src_chunk_len[i];
@@ -174,7 +172,7 @@ public:
             LOG_ERROR_RETURN(EINVAL, -1, "BaseCompressor init failed");
         }
         auto opt = &args->opt;
-        if (opt->type != CompressOptions::LZ4) {
+        if (opt->algo != CompressOptions::LZ4) {
             LOG_ERROR_RETURN(EINVAL, -1,
                              "Compression type invalid. (expected: CompressionOptions::LZ4)");
         }
@@ -208,7 +206,7 @@ public:
             return ret;
         }
 #endif
-        for (ssize_t i = 0; i < nblock; i++) {
+        for (size_t i = 0; i < nblock; i++) {
             ret =
                 LZ4_compress_default((const char *)uncompressed_data[i], (char *)compressed_data[i],
                                      src_chunk_len[i], dst_buffer_capacity / nblock);
@@ -240,7 +238,7 @@ public:
             return ret;
         }
 #endif
-        for (ssize_t i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             ret =
                 LZ4_decompress_safe((const char *)compressed_data[i], (char *)uncompressed_data[i],
                                     src_chunk_len[i], dst_buffer_capacity / n);
@@ -270,7 +268,7 @@ public:
             LOG_ERROR_RETURN(EINVAL, -1, "BaseCompressor init failed");
         }
         const CompressOptions *opt = &args->opt;
-        if (opt->type != CompressOptions::ZSTD) {
+        if (opt->algo != CompressOptions::ZSTD) {
             LOG_ERROR_RETURN(EINVAL, -1,
                              "Compression type invalid.(expected: CompressionOptions::ZSTD)");
         }
@@ -295,7 +293,7 @@ public:
                             size_t nblock) override {
 
         int ret = 0;
-        for (int i = 0; i < nblock; i++) {
+        for (size_t i = 0; i < nblock; i++) {
             ret = compress(uncompressed_data[i], src_chunk_len[i], compressed_data[i],
                            dst_buffer_capacity / nblock);
             if (ret < 0) {
@@ -311,7 +309,7 @@ public:
                               size_t dst_buffer_capacity, size_t nblock) override {
 
         int ret = 0;
-        for (ssize_t i = 0; i < nblock; i++) {
+        for (size_t i = 0; i < nblock; i++) {
             ret = decompress((const unsigned char *)uncompressed_data[i], src_chunk_len[i],
                              compressed_data[i], dst_buffer_capacity / nblock);
 
@@ -347,7 +345,7 @@ ICompressor *create_compressor(const CompressArgs *args) {
     ICompressor *rst = nullptr;
     int init_flg = 0;
     const CompressOptions &opt = args->opt;
-    switch (opt.type) {
+    switch (opt.algo) {
 
     case CompressOptions::LZ4:
         rst = new LZ4Compressor;

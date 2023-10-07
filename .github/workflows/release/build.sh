@@ -29,7 +29,7 @@ if [[ ${OS} =~ "ubuntu" ]]; then
     export DEBIAN_FRONTEND="noninteractive"
     export TZ="Etc/UTC"
     apt-get update -y
-    apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm wget make g++ git dpkg-dev sudo
+    apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm wget make g++ git dpkg-dev sudo pkg-config
     apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev libext2fs-dev zlib1g-dev
 
     DISTRO=${OS/:/1~}
@@ -50,22 +50,22 @@ elif [[ ${OS} =~ "centos" ]]; then
     fi
 
     yum install -y epel-release libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel
-    yum install -y rpm-build make git wget sudo
-    yum install --skip-broken -y libzstd-static libzstd-devel
+    yum install -y rpm-build make git wget sudo autoconf automake libtool
+    yum install --skip-broken -y libzstd-static gcc gcc-c++ binutils libzstd-devel
 elif [[ ${OS} =~ "mariner" ]]; then
     yum install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential
-    yum install -y rpm-build make git wget sudo tar gcc gcc-c++
+    yum install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool
 
     DISTRO=${OS/:/.}
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=1.${DISTRO}"
 fi
 
 if [[ ${ARCH} == "x86_64" ]]; then
-    wget https://cmake.org/files/v3.15/cmake-3.15.0-Linux-x86_64.tar.gz
+    wget --no-check-certificate https://cmake.org/files/v3.15/cmake-3.15.0-Linux-x86_64.tar.gz
     tar -zxf cmake-3.15.0-Linux-x86_64.tar.gz -C /usr/local/
     export PATH="/usr/local/cmake-3.15.0-Linux-x86_64/bin:$PATH"
 else
-    wget https://cmake.org/files/v3.20/cmake-3.20.6-linux-aarch64.tar.gz
+    wget --no-check-certificate https://cmake.org/files/v3.20/cmake-3.20.6-linux-aarch64.tar.gz
     tar -zxf cmake-3.20.6-linux-aarch64.tar.gz -C /usr/local/
     export PATH="/usr/local/cmake-3.20.6-linux-aarch64/bin:$PATH"
 fi

@@ -57,15 +57,13 @@ ext2_filsys do_ext2fs_open(io_manager extfs_manager) {
     );
     if (ret) {
         errno = -parse_extfs_error(nullptr, 0, ret);
-        LOG_ERROR("failed ext2fs_open, errno `:`", errno, strerror(errno));
-        return nullptr;
+        LOG_ERRNO_RETURN(0, nullptr, "failed ext2fs_open");
     }
     ret = ext2fs_read_bitmaps(fs);
     if (ret) {
         errno = -parse_extfs_error(fs, 0, ret);
-        LOG_ERROR("failed ext2fs_read_bitmaps, errno `:`", errno, strerror(errno));
         ext2fs_close(fs);
-        return nullptr;
+        LOG_ERRNO_RETURN(0, nullptr, "failed ext2fs_read_bitmaps");
     }
     LOG_INFO("ext2fs opened");
     return fs;
@@ -813,7 +811,7 @@ int do_ext2fs_access(ext2_filsys fs, const char *path, int mode) {
     mode_t perms = inode.i_mode & 0777;
     if ((mode & W_OK) && (inode.i_flags & EXT2_IMMUTABLE_FL))
         return -EACCES;
-    if ((mode & perms) == mode)
+    if ((mode & perms) == (mode_t)mode)
         return 0;
     return -EACCES;
 }
@@ -996,7 +994,7 @@ int do_ext2fs_fiemap(ext2_filsys fs, ext2_ino_t ino, struct photon::fs::fiemap* 
     if (ret) return parse_extfs_error(fs, ino, ret);
     map->fm_mapped_extents = blocks.size();
     photon::fs::fiemap_extent *ext_buf = &map->fm_extents[0];
-    for (int i = 0; i < blocks.size(); i++) {
+    for (uint32_t i = 0; i < blocks.size(); i++) {
         LOG_DEBUG("find block ` `", blocks[i].first * fs->blocksize, blocks[i].second * fs->blocksize);
         ext_buf[i].fe_physical = blocks[i].first * fs->blocksize;
         ext_buf[i].fe_length = blocks[i].second * fs->blocksize;

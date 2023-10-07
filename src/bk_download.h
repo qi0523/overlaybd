@@ -32,7 +32,7 @@ public:
     std::string dir;
     uint32_t try_cnt;
 
-    bool download(int &running);
+    bool download();
     bool lock_file();
     void unlock_file();
 
@@ -42,23 +42,26 @@ public:
         delete src_file;
     }
     BkDownload(ISwitchFile *sw_file, photon::fs::IFile *src_file, size_t file_size,
-               const std::string dir, int32_t limit_MB_ps, int32_t try_cnt, ImageFile *image_file,
-               std::string digest)
-        : sw_file(sw_file), src_file(src_file), file_size(file_size), dir(dir),
-          limit_MB_ps(limit_MB_ps), try_cnt(try_cnt), image_file(image_file), digest(digest) {
+               const std::string &dir, const std::string &digest, const std::string &url,
+               int &running, int32_t limit_MB_ps, int32_t try_cnt, uint32_t bs)
+        : dir(dir), try_cnt(try_cnt), sw_file(sw_file), src_file(src_file),
+          file_size(file_size), digest(digest), url(url), running(running),
+          limit_MB_ps(limit_MB_ps), block_size(bs) {
     }
 
 private:
     void switch_to_local_file();
-    bool download_blob(int &running);
+    bool download_blob();
     bool download_done();
 
     ISwitchFile *sw_file = nullptr;
     photon::fs::IFile *src_file = nullptr;
-    int32_t limit_MB_ps;
-    ImageFile *image_file;
-    std::string digest;
     size_t file_size;
+    std::string digest;
+    std::string url;
+    int &running;
+    int32_t limit_MB_ps;
+    uint32_t block_size;
     bool force_download = false;
 };
 

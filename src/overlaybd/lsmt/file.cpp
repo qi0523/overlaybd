@@ -165,8 +165,7 @@ struct HeaderTrailer {
 
     UUID::String uuid;        // 37 bytes.
     UUID::String parent_uuid; // 37 bytes.
-    uint8_t from;             // DEPRECATED
-    uint8_t to;               // DEPRECATED
+    uint16_t reserved;          // Reserved.
 
     static const uint8_t LSMT_V1 = 1;     // v1 (UUID check)
     static const uint8_t LSMT_SUB_V1 = 1; // .1 deprecated level range.
@@ -180,6 +179,7 @@ struct HeaderTrailer {
 
 class LSMTReadOnlyFile;
 static LSMTReadOnlyFile *open_file_ro(IFile *file, bool ownership, bool reserve_tag);
+static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false, ssize_t st_size = -1);
 
 static const uint32_t ALIGNMENT = 512; // same as trim block size.
 static const uint32_t ALIGNMENT4K = 4096;
@@ -221,9 +221,9 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
                  pht->uuid.c_str(), pht->parent_uuid.c_str());
     } else {
         LOG_INFO(
-            "write trailer {index_offset: `, index_size: `, virtual_size: `, uuid: `, parent_uuid: `}",
+            "write trailer {index_offset: `, index_size: `, virtual_size: `, uuid: `, parent_uuid: `, sealed: `}",
             pht->index_offset + 0, pht->index_size + 0, pht->virtual_size + 0, pht->uuid.c_str(),
-            pht->parent_uuid.c_str());
+            pht->parent_uuid.c_str(), pht->is_sealed());
     }
 
     if (args.parent_uuid.is_null()) {
@@ -346,6 +346,7 @@ static int load_layer_info(IFile **src_files, size_t n, LayerInfo &layer, bool o
     }
     HeaderTrailer *pht = (HeaderTrailer *)buf_top;
     layer.virtual_size = pht->virtual_size;
+    layer.sparse_rw = pht->is_sparse_rw();
     if (n != 1) {
         ALIGNED_MEM(buf_bottom, HeaderTrailer::SPACE, ALIGNMENT4K);
         //
@@ -384,6 +385,7 @@ static int compact(const CompactOptions &opt, atomic_uint64_t &compacted_idx_siz
     LayerInfo layer;
     if (load_layer_info(src_files, opt.n, layer) != 0)
         return -1;
+    layer.sparse_rw = false;
     layer.user_tag = commit_args->user_tag;
     layer.uuid.clear();
     if (UUID::String::is_valid((commit_args->uuid).c_str())) {
@@ -608,6 +610,12 @@ public:
         if (m_files.size() > 1) {
             LOG_ERROR_RETURN(ENOTSUP, -1, "not supported: commit stacked files");
         }
+        ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
+        // read file information in Trailer to check if it is a RW sealed file
+        auto pht = verify_ht(m_files[0], buf, true);
+        if (!pht->is_sealed()) {
+            LOG_ERROR_RETURN(ENOTSUP, -1, "Commit a compacted LSMTReadonlyFile is not allowed.");
+        }
         CompactOptions opts(&m_files, (SegmentMapping*)m_index->buffer(), m_index->size(), m_vsize, &args);
 
         atomic_uint64_t _no_use_var(0);
@@ -830,9 +838,9 @@ public:
         if (m_files.size() > 1) {
             LOG_ERROR_RETURN(ENOTSUP, -1, "not supported: commit stacked files");
         }
+
         auto m_index0 = (IMemoryIndex0 *)m_index;
         unique_ptr<SegmentMapping[]> mapping(m_index0->dump());
-
         CompactOptions opts(&m_files, mapping.get(), m_index->size(), m_vsize, &args);
 
         atomic_uint64_t _no_use_var(0);
@@ -968,10 +976,6 @@ public:
                                        m.length * ALIGNMENT);
     }
 
-    // sparse RW File can't support these methods:
-    // UNIMPLEMENTED(int commit(const CommitArgs &args) const override);
-    UNIMPLEMENTED(int close_seal(IFileRO **reopen_as = nullptr) override);
-
     static int create_mappings(const IFile *file, vector<SegmentMapping> &mappings,
                                off_t base = BASE_MOFFSET) {
 
@@ -1106,7 +1110,7 @@ public:
         LOG_DEBUG("write index to dest_file `, offset: `, size: `*`", dest_file, index_offset,
                   index_size, sizeof(SegmentMapping));
         auto nwrite = dest_file->write(&compact_index[0], index_size * sizeof(SegmentMapping));
-        if (nwrite != (ssize_t)index_size * sizeof(SegmentMapping)) {
+        if (nwrite != (ssize_t)(index_size * sizeof(SegmentMapping))) {
             LOG_ERRNO_RETURN(0, -1, "write index failed");
         }
         nindex = index_size;
@@ -1123,6 +1127,11 @@ public:
         CompactOptions opts(&m_files, mapping.get(), m_index->size(), m_vsize, &args);
         LayerInfo info;
         info.virtual_size = m_vsize;
+        info.uuid.clear();
+        if (UUID::String::is_valid((args.uuid).c_str())) {
+            LOG_INFO("set UUID: `", args.uuid.data);
+            info.uuid.parse(args.uuid);
+        }
         if (UUID::String::is_valid((args.parent_uuid).c_str())) {
             LOG_INFO("set parent UUID: `", args.parent_uuid.data);
             info.parent_uuid.parse(args.parent_uuid);
@@ -1140,17 +1149,33 @@ public:
     }
 };
 
-HeaderTrailer *verify_ht(IFile *file, char *buf) {
+static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, ssize_t st_size) {
     if (file == nullptr) {
         LOG_ERRNO_RETURN(0, nullptr, "invalid file ptr (null).");
     }
-    auto ret = file->pread(buf, HeaderTrailer::SPACE, 0);
-    if (ret < (ssize_t)HeaderTrailer::SPACE)
-        LOG_ERRNO_RETURN(0, nullptr, "failed to read file header.");
-
     auto pht = (HeaderTrailer *)buf;
-    if (!pht->verify_magic() || !pht->is_header())
-        LOG_ERROR_RETURN(0, nullptr, "header magic/type don't match");
+    if (!is_trailer) {
+        auto ret = file->pread(buf, HeaderTrailer::SPACE, 0);
+        if (ret < (ssize_t)HeaderTrailer::SPACE)
+            LOG_ERRNO_RETURN(0, nullptr, "failed to read file header.");
+
+        if (!pht->verify_magic() || !pht->is_header())
+            LOG_ERROR_RETURN(0, nullptr, "header magic/type don't match");
+        return pht;
+    }
+    if (st_size == -1) {
+        struct stat st;
+        file->fstat(&st);
+        st_size = st.st_size;
+    }
+    auto trailer_offset = st_size - HeaderTrailer::SPACE;
+    auto ret = file->pread(buf, HeaderTrailer::SPACE, trailer_offset);
+    if (ret < (ssize_t)HeaderTrailer::SPACE)
+        LOG_ERRNO_RETURN(0, nullptr, "failed to read file trailer.");
+    if (!pht->verify_magic() || !pht->is_trailer() || !pht->is_data_file() || !pht->is_sealed())
+        LOG_ERROR_RETURN(0, nullptr,
+                            "trailer magic, trailer type, "
+                            "file type or sealedness doesn't match");
     return pht;
 }
 
@@ -1159,8 +1184,9 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
 
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(file, buf);
-    if (pht == nullptr)
+    if (pht == nullptr) {
         return nullptr;
+    }
     struct stat stat;
     auto ret = file->fstat(&stat);
     if (ret < 0)
@@ -1170,19 +1196,13 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
     if (trailer) {
         if (!pht->is_data_file())
             LOG_ERROR_RETURN(0, nullptr, "uncognized file type");
-
+        pht = verify_ht(file, buf, true, stat.st_size);
+        if (pht == nullptr) {
+            return nullptr;
+        }
         auto trailer_offset = stat.st_size - HeaderTrailer::SPACE;
-        ret = file->pread(buf, HeaderTrailer::SPACE, trailer_offset);
-        if (ret < (ssize_t)HeaderTrailer::SPACE)
-            LOG_ERRNO_RETURN(0, nullptr, "failed to read file trailer.");
-
-        if (!pht->verify_magic() || !pht->is_trailer() || !pht->is_data_file() || !pht->is_sealed())
-            LOG_ERROR_RETURN(0, nullptr,
-                             "trailer magic, trailer type, "
-                             "file type or sealedness doesn't match");
         LOG_DEBUG("index_size: `, trailer offset: `", pht->index_size + 0, trailer_offset);
         index_bytes = pht->index_size * sizeof(SegmentMapping);
-
         if (index_bytes > trailer_offset - pht->index_offset)
             LOG_ERROR_RETURN(0, nullptr, "invalid index bytes or size");
 
@@ -1513,7 +1533,7 @@ void *do_parallel_load_index(void *param) {
             return nullptr;
         }
         auto file = job->get_file();
-        LOG_INFO("check file if normalfile or LSMTFile");
+        LOG_INFO("check `-th file is normal file or LSMT file", job->i);
         IMemoryIndex *pi = nullptr;
         LSMT::SegmentMapping *p = nullptr;
         auto type = file->ioctl(IFileRO::GetType);
@@ -1545,6 +1565,7 @@ void *do_parallel_load_index(void *param) {
             LOG_ERROR_RETURN(0, nullptr, "failed to create memory index!");
         }
         job->set_index(pi);
+        LOG_INFO("load index from `-th file done", job->i);
     }
     return NULL;
 }

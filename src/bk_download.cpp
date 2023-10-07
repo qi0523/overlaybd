@@ -22,6 +22,7 @@
 #include <sys/file.h>
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
+#include <photon/common/alog-audit.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/throttled-file.h>
 #include <photon/thread/thread.h>
@@ -55,7 +56,7 @@ std::string sha256sum(const char *fn) {
     SHA256_Init(&ctx);
     __attribute__((aligned(ALIGNMENT))) char buffer[65536];
     unsigned char sha[32];
-    int recv = 0;
+    ssize_t recv = 0;
     for (off_t offset = 0; offset < stat.st_size; offset += BUFFERSIZE) {
         recv = pread(fd, &buffer, BUFFERSIZE, offset);
         if (recv < 0) {
@@ -109,14 +110,16 @@ bool BkDownload::download_done() {
     new_name = dir + "/" + COMMIT_FILE_NAME;
 
     // verify sha256
-    auto th = photon::CURRENT;
+    photon::semaphore done;
     std::string shares;
-    std::thread sha256_thread([&, th]() {
+    std::thread sha256_thread([&]() {
         shares = sha256sum(old_name.c_str());
-        photon::thread_interrupt(th, EINTR);
+        done.signal(1);
     });
     sha256_thread.detach();
-    photon::thread_usleep(-1UL);
+    // wait verify finish
+    done.wait(1);
+
     if (shares != digest) {
         LOG_ERROR("verify checksum ` failed (expect: `, got: `)", old_name, digest, shares);
         force_download = true; // force redownload next time
@@ -125,20 +128,19 @@ bool BkDownload::download_done() {
 
     int ret = lfs->rename(old_name.c_str(), new_name.c_str());
     if (ret != 0) {
-        LOG_ERROR("rename(`,`), `:`", old_name, new_name, errno, strerror(errno));
-        return false;
+        LOG_ERRNO_RETURN(0, false, "rename(`,`) failed", old_name, new_name);
     }
-    LOG_INFO("download done. rename(`,`) success", old_name, new_name);
+    LOG_INFO("download verify done. rename(`,`) success", old_name, new_name);
     return true;
 }
 
-bool BkDownload::download(int &running) {
+bool BkDownload::download() {
     if (check_downloaded(dir)) {
         switch_to_local_file();
         return true;
     }
 
-    if (download_blob(running)) {
+    if (download_blob()) {
         if (!download_done())
             return false;
         switch_to_local_file();
@@ -149,7 +151,7 @@ bool BkDownload::download(int &running) {
 
 bool BkDownload::lock_file() {
     if (lock_files.find(dir) != lock_files.end()) {
-        LOG_WARN("failded to lock download path:`", dir);
+        LOG_WARN("failed to lock download path:`", dir);
         return false;
     }
     lock_files.insert(dir);
@@ -160,7 +162,7 @@ void BkDownload::unlock_file() {
     lock_files.erase(dir);
 }
 
-bool BkDownload::download_blob(int &running) {
+bool BkDownload::download_blob() {
     std::string dl_file_path = dir + "/" + DOWNLOAD_TMP_NAME;
     try_cnt--;
     IFile *src = src_file;
@@ -183,7 +185,7 @@ bool BkDownload::download_blob(int &running) {
     DEFER(delete dst;);
     dst->ftruncate(file_size);
 
-    size_t bs = 256 * 1024;
+    size_t bs = block_size;
     off_t offset = 0;
     void *buff = nullptr;
     // buffer allocate, with 4K alignment
@@ -192,6 +194,7 @@ bool BkDownload::download_blob(int &running) {
         LOG_ERRNO_RETURN(0, false, "failed to allocate buffer with ", VALUE(bs));
     DEFER(free(buff));
 
+    LOG_INFO("download blob start. (`)", url);
     while (offset < file_size) {
         if (running != 1) {
             LOG_INFO("image file exit when background downloading");
@@ -214,7 +217,11 @@ bool BkDownload::download_blob(int &running) {
     again_read:
         if (!(retry--))
             LOG_ERROR_RETURN(EIO, false, "failed to read at ", VALUE(offset), VALUE(count));
-        auto rlen = src->pread(buff, bs, offset);
+        ssize_t rlen;
+        {
+            SCOPE_AUDIT("bk_download", AU_FILEOP(url, offset, rlen));
+            rlen = src->pread(buff, bs, offset);
+        }
         if (rlen < 0) {
             LOG_WARN("failed to read at ", VALUE(offset), VALUE(count), VALUE(errno), " retry...");
             goto again_read;
@@ -231,6 +238,7 @@ bool BkDownload::download_blob(int &running) {
         }
         offset += count;
     }
+    LOG_INFO("download blob done. (`)", dl_file_path);
     return true;
 }
 
@@ -260,7 +268,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
             continue;
         }
 
-        bool succ = dl_item->download(running);
+        bool succ = dl_item->download();
         dl_item->unlock_file();
 
         if (running != 1) {
@@ -287,7 +295,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
             delete dl_item;
         }
     }
-    LOG_DEBUG("BACKGROUND DOWNLOAD THREAD EXIT.");
+    LOG_INFO("BACKGROUND DOWNLOAD THREAD EXIT.");
 }
 
 } // namespace BKDL
