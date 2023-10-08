@@ -113,7 +113,7 @@ public:
 
     long GET(const char *url, photon::net::HeaderMap *headers, off_t offset, size_t count,
              photon::net::IOVWriter *writer, uint64_t timeout) {
-        Timeout tmo(0);
+        Timeout tmo(timeout);
         long ret = 0;
         // UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
         //     return getActualUrl(url, tmo.timeout(), ret);
