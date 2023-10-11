@@ -14,14 +14,14 @@
     },
     "ioEngine": 0,
     "download": {
-        "enable": true,
+        "enable": false,
         "delay": 600,
         "delayExtra": 30,
         "maxMBps": 100
     },
     "p2pConfig": {
-        "enable": false,
-        "address": "localhost:19145/dadip2p"
+        "enable": true,
+        "address": "localhost:30000/dadip2p"
     },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log",
