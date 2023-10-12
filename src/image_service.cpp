@@ -445,7 +445,7 @@ bool ImageService::enable_acceleration() {
     }
 }
 
-ImageFile *ImageService::create_image_file(const char *config_path) {
+ImageFile *ImageService::create_image_file(const char *config_path, const std::string policy) {
     ImageConfigNS::GlobalConfig defaultDlCfg;
     if (!defaultDlCfg.ParseJSON(m_config_path)) {
         LOG_WARN("default download config parse failed, ignore");
@@ -468,7 +468,7 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     }
 
     auto resFile = cfg.resultFile();
-    ImageFile *ret = new ImageFile(cfg, *this);
+    ImageFile *ret = new ImageFile(cfg, *this, policy);
     if (ret->m_status <= 0) {
         std::string data = "failed:" + ret->m_exception;
         set_result_file(resFile, data);

@@ -113,6 +113,11 @@ IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::str
 
     if (url[url.length() - 1] != '/')
         url += "/";
+    
+    if (this->policy != "") {
+        url += this->policy;
+        url += "/";
+    }
     url += data_digest;
 
     LOG_INFO("open file from remotefs: `", url);
@@ -140,6 +145,11 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
 
     if (url[url.length() - 1] != '/')
         url += "/";
+
+    if (this->policy != "") {
+        url += this->policy;
+        url += "/";
+    }
     url += digest;
 
     LOG_INFO("open file from remotefs: `, size: `", url, size);

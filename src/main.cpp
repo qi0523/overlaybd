@@ -318,6 +318,12 @@ static int dev_open(struct tcmu_device *dev) {
         LOG_ERROR_RETURN(0, -EPERM, "get image config path failed");
     }
 
+    std::string policy = "";
+    if (std::string(config).find("#~~#") != std::string::npos) {
+        char *new_config = strchr(config, '/');
+        policy = std::string(config).substr(0, new_config - config);
+        config = new_config + 1;
+    }
     struct timeval start;
     gettimeofday(&start, NULL);
 

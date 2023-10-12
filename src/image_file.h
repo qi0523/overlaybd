@@ -41,8 +41,8 @@ static std::string SEALED_FILE_NAME = "overlaybd.sealed";
 
 class ImageFile : public photon::fs::ForwardFile {
 public:
-    ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is)
-        : ForwardFile(nullptr), image_service(is) {
+    ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is, const std::string _policy)
+        : ForwardFile(nullptr), image_service(is), policy(_policy) {
         conf.CopyFrom(_conf, conf.GetAllocator());
         m_exception = "";
         m_status = init_image_file();
@@ -114,6 +114,7 @@ private:
     std::list<BKDL::BkDownload *> dl_list;
     photon::join_handle *dl_thread_jh = nullptr;
     ImageService &image_service;
+    std::string policy;
 
     int init_image_file();
     void set_failed(std::string reason);

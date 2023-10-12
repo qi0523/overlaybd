@@ -54,7 +54,7 @@ public:
     ImageService(const char *config_path = nullptr);
     ~ImageService();
     int init();
-    ImageFile *create_image_file(const char *image_config_path);
+    ImageFile *create_image_file(const char *image_config_path, const std::string policy = "");
     // bool enable_acceleration(GlobalFs *global_fs, ImageConfigNS::P2PConfig conf);
     bool enable_acceleration();
 
