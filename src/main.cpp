@@ -327,7 +327,7 @@ static int dev_open(struct tcmu_device *dev) {
     struct timeval start;
     gettimeofday(&start, NULL);
 
-    ImageFile *file = imgservice->create_image_file(config);
+    ImageFile *file = imgservice->create_image_file(config, policy);
     if (file == nullptr) {
         LOG_ERROR_RETURN(0, -EPERM, "create image file failed");
     }
