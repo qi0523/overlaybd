@@ -319,7 +319,7 @@ static int dev_open(struct tcmu_device *dev) {
     }
 
     std::string policy = "";
-    if (std::string(config).find("#~~#") != std::string::npos) {
+    if (std::string(config).find("~~~~") != std::string::npos) {
         char *new_config = strchr(config, '/');
         policy = std::string(config).substr(0, new_config - config);
         config = new_config + 1;
